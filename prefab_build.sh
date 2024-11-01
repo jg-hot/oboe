@@ -46,8 +46,8 @@ pushd build/prefab
   for abi in ${ABIS[@]}
   do
 
-    prefab --build-system cmake --platform android --os-version 29 \
-        --stl c++_shared --ndk-version 21 --abi ${abi} \
+    prefab --build-system cmake --platform android --os-version 21 \
+        --stl c++_shared --ndk-version 27 --abi ${abi} \
         --output prefab-output-tmp $(pwd)/oboe-${version}/prefab
 
     result=$?; if [[ $result == 0 ]]; then
