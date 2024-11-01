@@ -12,7 +12,11 @@ fi
 major=$(grep "#define OBOE_VERSION_MAJOR" include/oboe/Version.h | cut -d' ' -f3)
 minor=$(grep "#define OBOE_VERSION_MINOR" include/oboe/Version.h | cut -d' ' -f3)
 patch=$(grep "#define OBOE_VERSION_PATCH" include/oboe/Version.h | cut -d' ' -f3)
-version=$major"."$minor"."$patch
+tag="patch1"
+
+# prefab version doesn't include the tag since it's not compatible with cmake
+version_prefab=$major"."$minor"."$patch
+version=$version_prefab"-"$tag
 
 echo "Building libraries for Oboe version "$version
 ./build_all_android.sh
@@ -29,8 +33,9 @@ pushd build/prefab
 
   # Write the version number into the various metadata files
   mv oboe-VERSION oboe-$version
-  mv oboe-VERSION.pom oboe-$version.pom
-  sed -i '' -e "s/VERSION/${version}/g" oboe-$version.pom oboe-$version/prefab/prefab.json
+  mv oboe-VERSION.pom oboe-patched-$version.pom
+  sed -i '' -e "s/VERSION/${version}/g" oboe-patched-$version.pom
+  sed -i '' -e "s/VERSION/${version_prefab}/g" oboe-$version/prefab/prefab.json
 
   # Copy the headers
   cp -R ../../include oboe-$version/prefab/modules/oboe/
@@ -60,8 +65,8 @@ pushd build/prefab
 
   # Zip into an AAR and move into parent dir
   pushd oboe-${version}
-    zip -r oboe-${version}.aar . 2>/dev/null;
-    zip -Tv oboe-${version}.aar 2>/dev/null;
+    zip -r oboe-patched-${version}.aar . 2>/dev/null;
+    zip -Tv oboe-patched-${version}.aar 2>/dev/null;
 
     # Verify that the aar contents are correct (see output below to verify)
     result=$?; if [[ $result == 0 ]]; then
@@ -71,12 +76,12 @@ pushd build/prefab
       exit 1
     fi
 
-    mv oboe-${version}.aar ..
+    mv oboe-patched-${version}.aar ..
   popd
 
   # Zip the .aar and .pom files into a maven package
-  zip oboe-${version}.zip oboe-${version}.* 2>/dev/null;
-  zip -Tv oboe-${version}.zip 2>/dev/null;
+  zip oboe-patched-${version}.zip oboe-patched-${version}.* 2>/dev/null;
+  zip -Tv oboe-patched-${version}.zip 2>/dev/null;
 
   # Verify that the zip contents are correct (see output below to verify)
   result=$?; if [[ $result == 0 ]]; then
@@ -87,4 +92,4 @@ pushd build/prefab
   fi
 popd
 
-echo "Prefab zip ready for deployment: ./build/prefab/oboe-${version}.zip"
+echo "Prefab zip ready for deployment: ./build/prefab/oboe-patched-${version}.zip"
