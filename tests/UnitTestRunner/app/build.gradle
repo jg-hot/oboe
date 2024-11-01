@@ -1,6 +1,7 @@
 apply plugin: 'com.android.application'
 
 android {
+    namespace 'com.google.oboe.tests.unittestrunner'
     compileSdkVersion 34
     defaultConfig {
         applicationId "com.google.oboe.tests.unittestrunner"
@@ -8,6 +9,8 @@ android {
         targetSdkVersion 34
         versionCode 1
         versionName "1.0"
+
+        ndkVersion = "27.2.12479018"
     }
     buildTypes {
         release {
@@ -18,6 +21,7 @@ android {
     externalNativeBuild {
         cmake {
             path file('../../CMakeLists.txt')
+            version = "3.30.5"
         }
     }
 }
