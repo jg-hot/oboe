@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 set -o xtrace
 
-rm -rf build/
+BUILD_DIR="./build/prefab"
+rm -rf "./build"
 
-# TODO: ensure the correct cmake version is being used (from the NDK)
-# this might not work if cmake is already on the path before sourcing
-# build_environment.sh
 source ./build_environment.sh
 ./prefab_build.sh
 
-mvn install:install-file \
-    -Dfile=./build/prefab/oboe-patched-1.9.0-patch1.aar \
-    -DpomFile=./build/prefab/oboe-patched-1.9.0-patch1.pom \
+ARTIFACT="oboe-patched-1.9.0-patch1"
+
+mvn deploy:deploy-file \
+    -Durl="https://maven.pkg.github.com/jg-hot/oboe" \
+    -DrepositoryId="gpr:oboe-patched" \
+    -Dfile="${BUILD_DIR}/$ARTIFACT.aar" \
+    -DpomFile="${BUILD_DIR}/$ARTIFACT.pom" \
     -Dpackaging=aar \
+
+# or if installing to maven local
+# mvn install:install-file \
+#     -Dfile="${BUILD_DIR}/$ARTIFACT.aar" \
+#     -DpomFile="./android/$ARTIFACT.pom" \
+#     -Dpackaging=aar \

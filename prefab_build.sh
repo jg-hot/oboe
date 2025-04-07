@@ -34,8 +34,10 @@ pushd build/prefab
   # Write the version number into the various metadata files
   mv oboe-VERSION oboe-$version
   mv oboe-VERSION.pom oboe-patched-$version.pom
-  sed -i '' -e "s/VERSION/${version}/g" oboe-patched-$version.pom
-  sed -i '' -e "s/VERSION/${version_prefab}/g" oboe-$version/prefab/prefab.json
+
+  # version is hardcoded into metadata files
+  # sed -i '' -e "s/VERSION/${version}/g" oboe-patched-$version.pom
+  # sed -i '' -e "s/VERSION/${version_prefab}/g" oboe-$version/prefab/prefab.json
 
   # Copy the headers
   cp -R ../../include oboe-$version/prefab/modules/oboe/
