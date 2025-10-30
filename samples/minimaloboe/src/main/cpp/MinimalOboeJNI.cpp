@@ -40,9 +40,9 @@ static SimpleNoiseMaker sPlayer;
  * Native (JNI) implementation of AudioPlayer.startAudiostreamNative()
  */
 JNIEXPORT jint JNICALL Java_com_example_minimaloboe_AudioPlayer_startAudioStreamNative(
-        JNIEnv * /* env */, jobject) {
+        JNIEnv * /* env */, jobject, jboolean forceConversion) {
     __android_log_print(ANDROID_LOG_INFO, TAG, "%s", __func__);
-    Result result = sPlayer.open();
+    Result result = sPlayer.open(forceConversion);
     if (result == Result::OK) {
         result = sPlayer.start();
     }
@@ -52,12 +52,13 @@ JNIEXPORT jint JNICALL Java_com_example_minimaloboe_AudioPlayer_startAudioStream
 /**
  * Native (JNI) implementation of AudioPlayer.stopAudioStreamNative()
  */
-JNIEXPORT jint JNICALL Java_com_example_minimaloboe_AudioPlayer_stopAudioStreamNative(
+JNIEXPORT jint JNICALL Java_com_example_minimaloboe_AudioPlayer_stopAndReleaseAudioStreamNative(
         JNIEnv * /* env */, jobject) {
     __android_log_print(ANDROID_LOG_INFO, TAG, "%s", __func__);
     // We need to close() even if the stop() fails because we need to delete the resources.
     Result result1 = sPlayer.stop();
     Result result2 = sPlayer.close();
+    sPlayer.release();
     // Return first failure code.
     return (jint) ((result1 != Result::OK) ? result1 : result2);
 }

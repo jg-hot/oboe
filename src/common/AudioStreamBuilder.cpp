@@ -91,12 +91,12 @@ bool AudioStreamBuilder::isCompatible(AudioStreamBase &other) {
            && (getChannelCount() == oboe::Unspecified || getChannelCount() == other.getChannelCount());
 }
 
-Result AudioStreamBuilder::openStream(AudioStream **streamPP) {
+Result AudioStreamBuilder::openStream(AudioStream **streamPP, bool forceConversion) {
     LOGW("Passing AudioStream pointer deprecated, Use openStream(std::shared_ptr<oboe::AudioStream> &stream) instead.");
-    return openStreamInternal(streamPP);
+    return openStreamInternal(streamPP, forceConversion);
 }
 
-Result AudioStreamBuilder::openStreamInternal(AudioStream **streamPP) {
+Result AudioStreamBuilder::openStreamInternal(AudioStream **streamPP, bool forceConversion) {
     auto result = isValidConfig();
     if (result != Result::OK) {
         LOGW("%s() invalid config. Error %s", __func__, oboe::convertToText(result));
@@ -125,7 +125,7 @@ Result AudioStreamBuilder::openStreamInternal(AudioStream **streamPP) {
 
 #ifndef DISABLE_CONVERSION
     // Check need for conversion and modify childBuilder for optimal stream.
-    bool conversionNeeded = QuirksManager::getInstance().isConversionNeeded(*this, childBuilder);
+    bool conversionNeeded = forceConversion || QuirksManager::getInstance().isConversionNeeded(*this, childBuilder);
     // Do we need to make a child stream and convert.
     if (conversionNeeded) {
         if (isPartialDataCallbackSpecified()) {
@@ -134,12 +134,12 @@ Result AudioStreamBuilder::openStreamInternal(AudioStream **streamPP) {
             return Result::ErrorIllegalArgument;
         }
         AudioStream *tempStream;
-        result = childBuilder.openStreamInternal(&tempStream);
+        result = childBuilder.openStreamInternal(&tempStream, false);
         if (result != Result::OK) {
             return result;
         }
 
-        if (isCompatible(*tempStream)) {
+        if (!forceConversion && isCompatible(*tempStream)) {
             // The child stream would work as the requested stream so we can just use it directly.
             *streamPP = tempStream;
             return result;
@@ -237,10 +237,10 @@ Result AudioStreamBuilder::openManagedStream(oboe::ManagedStream &stream) {
     return result;
 }
 
-Result AudioStreamBuilder::openStream(std::shared_ptr<AudioStream> &sharedStream) {
+Result AudioStreamBuilder::openStream(std::shared_ptr<AudioStream> &sharedStream, bool forceConversion) {
     sharedStream.reset();
     AudioStream *streamptr;
-    auto result = openStreamInternal(&streamptr);
+    auto result = openStreamInternal(&streamptr, forceConversion);
     if (result == Result::OK) {
         sharedStream.reset(streamptr);
         // Save a weak_ptr in the stream for use with callbacks.

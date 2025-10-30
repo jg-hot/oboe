@@ -77,9 +77,9 @@ static int32_t oboe_aaudio_partial_data_callback_proc(
 // It calls app error callbacks from a static function in case the stream gets deleted.
 static void oboe_aaudio_error_thread_proc_common(AudioStreamAAudio *oboeStream,
                                           Result error) {
-#if 0
-    LOGE("%s() sleep for 5 seconds", __func__);
-    usleep(5*1000*1000);
+#if 1
+    LOGE("%s() sleep for 2 seconds", __func__);
+    usleep(2*1000*1000);
     LOGD("%s() - woke up -------------------------", __func__);
 #endif
     AudioStreamErrorCallback *errorCallback = oboeStream->getErrorCallback();

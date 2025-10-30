@@ -24,7 +24,7 @@ static const char *TAG = "SimpleNoiseMaker";
 
 using namespace oboe;
 
-oboe::Result SimpleNoiseMaker::open() {
+oboe::Result SimpleNoiseMaker::open(bool forceConversion) {
     // Use shared_ptr to prevent use of a deleted callback.
     mDataCallback = std::make_shared<MyDataCallback>();
     mErrorCallback = std::make_shared<MyErrorCallback>(this);
@@ -37,20 +37,20 @@ oboe::Result SimpleNoiseMaker::open() {
             ->setDataCallback(mDataCallback)
             ->setErrorCallback(mErrorCallback)
                     // Open using a shared_ptr.
-            ->openStream(mStream);
+            ->openStream(mStream, forceConversion);
     return result;
 }
 
 oboe::Result SimpleNoiseMaker::start() {
-    return mStream->requestStart();
+    return mStream ? mStream->requestStart() : oboe::Result::ErrorClosed;
 }
 
 oboe::Result SimpleNoiseMaker::stop() {
-    return mStream->requestStop();
+    return mStream ? mStream->requestStop() : oboe::Result::ErrorClosed;
 }
 
 oboe::Result SimpleNoiseMaker::close() {
-    return mStream->close();
+    return mStream ? mStream->close() : oboe::Result::ErrorClosed;
 }
 
 /**
@@ -85,8 +85,18 @@ void SimpleNoiseMaker::MyErrorCallback::onErrorAfterClose(oboe::AudioStream *obo
                         __func__,
                         oboe::convertToText(error)
     );
-    // Try to open and start a new stream after a disconnect.
-    if (mParent->open() == Result::OK) {
-        mParent->start();
-    }
+    // no auto-restart until user taps the button again
+
+    // NOTE: if your app is following the pattern in this sample and releasing a stream's
+    // memory based on audio device connections, you will probably need a std::weak_ptr to mParent here
+
+    // if (mParent->open() == Result::OK) {
+    //     mParent->start();
+    // }
+}
+
+void SimpleNoiseMaker::release() {
+    __android_log_print(ANDROID_LOG_INFO, TAG, "%s() - enter", __func__);
+    mStream.reset();
+    __android_log_print(ANDROID_LOG_INFO, TAG, "%s() - exit", __func__);
 }

@@ -722,7 +722,7 @@ public:
      * @param stream pointer to a variable to receive the stream address
      * @return OBOE_OK if successful or a negative error code
      */
-    Result openStream(AudioStream **stream);
+    Result openStream(AudioStream **stream, bool forceConversion = false);
 
     /**
      * Create and open a stream object based on the current settings.
@@ -734,7 +734,7 @@ public:
      * @param stream reference to a shared_ptr to receive the stream address
      * @return OBOE_OK if successful or a negative error code
      */
-    Result openStream(std::shared_ptr<oboe::AudioStream> &stream);
+    Result openStream(std::shared_ptr<oboe::AudioStream> &stream, bool forceConversion = false);
 
     /**
      * Create and open a ManagedStream object based on the current builder state.
@@ -757,7 +757,7 @@ private:
      * @param stream pointer to a variable to receive the stream address
      * @return OBOE_OK if successful or a negative error code.
      */
-    Result openStreamInternal(AudioStream **streamPP);
+    Result openStreamInternal(AudioStream **streamPP, bool forceConversion);
 
     /**
      * @param other

@@ -16,6 +16,7 @@
 
 package com.example.minimaloboe
 
+import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +28,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
 
+private const val TAG = "FilterAudioStreamUAF"
+
 object AudioPlayer : DefaultLifecycleObserver {
 
     // Create a coroutine scope which we can launch coroutines from. This way, if our
@@ -35,6 +38,8 @@ object AudioPlayer : DefaultLifecycleObserver {
     private val coroutineScope = CoroutineScope(Dispatchers.Default) + Job()
     private var _playerState = MutableStateFlow<PlayerState>(PlayerState.NoResultYet)
     val playerState = _playerState.asStateFlow()
+    val _forceConversion = MutableStateFlow(true)
+    val forceConversion = _forceConversion.asStateFlow()
 
     init {
         // Load the library containing the native code including the JNI functions.
@@ -42,15 +47,16 @@ object AudioPlayer : DefaultLifecycleObserver {
     }
 
     fun setPlaybackEnabled(isEnabled: Boolean) {
+        Log.i(TAG, "setPlaybackEnabled: $isEnabled")
         // Start (and stop) Oboe from a coroutine in case it blocks for too long.
         // If the AudioServer has died it may take several seconds to recover.
         // That can cause an ANR if we are starting audio from the main UI thread.
         coroutineScope.launch {
 
             val result = if (isEnabled) {
-                startAudioStreamNative()
+                startAudioStreamNative(forceConversion.value)
             } else {
-                stopAudioStreamNative()
+                stopAndReleaseAudioStreamNative()
             }
 
             val newUiState = if (result == 0) {
@@ -67,13 +73,17 @@ object AudioPlayer : DefaultLifecycleObserver {
         }
     }
 
+    fun setForceConversion(forceConversion: Boolean) {
+        _forceConversion.update { forceConversion }
+    }
+
     override fun onStop(owner: LifecycleOwner) {
         setPlaybackEnabled(false)
         super.onStop(owner)
     }
 
-    private external fun startAudioStreamNative(): Int
-    private external fun stopAudioStreamNative(): Int
+    private external fun startAudioStreamNative(forceConversion: Boolean): Int
+    private external fun stopAndReleaseAudioStreamNative(): Int
 }
 
 sealed interface PlayerState {

@@ -29,13 +29,15 @@ public:
      * Open an Oboe stream.
      * @return OK or negative error code.
      */
-    oboe::Result open();
+    oboe::Result open(bool forceConversion);
 
     oboe::Result start();
 
     oboe::Result stop();
 
     oboe::Result close();
+
+    void release();
 
 private:
 
@@ -58,7 +60,7 @@ private:
         void onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) override;
 
     private:
-        SimpleNoiseMaker *mParent;
+        [[maybe_unused]] SimpleNoiseMaker *mParent;
     };
 
     std::shared_ptr<oboe::AudioStream> mStream;
