@@ -595,6 +595,9 @@ public:
      */
     AudioStreamBuilder *setPresentationCallback(
             std::shared_ptr<AudioStreamPresentationCallback> sharedPresentationCallback) {
+        // Use this raw pointer in the rest of the code to retain backwards compatibility.
+        mPresentationCallback = sharedPresentationCallback.get();
+        // Hold a shared_ptr to protect the raw pointer for the lifetime of the stream.
         mSharedPresentationCallback = sharedPresentationCallback;
         return this;
     }

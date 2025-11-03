@@ -75,63 +75,63 @@ static int32_t oboe_aaudio_partial_data_callback_proc(
 // This runs in its own thread.
 // Only one of these threads will be launched from internalErrorCallback().
 // It calls app error callbacks from a static function in case the stream gets deleted.
-static void oboe_aaudio_error_thread_proc_common(AudioStreamAAudio *oboeStream,
+static void oboe_aaudio_error_thread_proc_common(AudioStream *baseStream,
                                           Result error) {
 #if 0
     LOGE("%s() sleep for 5 seconds", __func__);
     usleep(5*1000*1000);
     LOGD("%s() - woke up -------------------------", __func__);
 #endif
-    AudioStreamErrorCallback *errorCallback = oboeStream->getErrorCallback();
+    AudioStreamErrorCallback *errorCallback = baseStream->getErrorCallback();
     if (errorCallback == nullptr) return; // should be impossible
-    bool isErrorHandled = errorCallback->onError(oboeStream, error);
+    bool isErrorHandled = errorCallback->onError(baseStream, error);
 
     if (!isErrorHandled) {
-        oboeStream->requestStop();
-        errorCallback->onErrorBeforeClose(oboeStream, error);
-        oboeStream->close();
-        // Warning, oboeStream may get deleted by this callback.
-        errorCallback->onErrorAfterClose(oboeStream, error);
+        baseStream->requestStop();
+        errorCallback->onErrorBeforeClose(baseStream, error);
+        baseStream->close();
+        // Warning, baseStream may get deleted by this callback.
+        errorCallback->onErrorAfterClose(baseStream, error);
     }
 }
 
 // Callback thread for raw pointers.
-static void oboe_aaudio_error_thread_proc(AudioStreamAAudio *oboeStream,
+static void oboe_aaudio_error_thread_proc(AudioStream *baseStream,
                                           Result error) {
     LOGD("%s(,%d) - entering >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", __func__, error);
-    oboe_aaudio_error_thread_proc_common(oboeStream, error);
+    oboe_aaudio_error_thread_proc_common(baseStream, error);
     LOGD("%s() - exiting <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<", __func__);
 }
 
 // Callback thread for shared pointers.
-static void oboe_aaudio_error_thread_proc_shared(std::shared_ptr<AudioStream> sharedStream,
+static void oboe_aaudio_error_thread_proc_shared(std::shared_ptr<AudioStream> sharedBaseStream,
                                           Result error) {
     LOGD("%s(,%d) - entering >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", __func__, error);
     // Hold the shared pointer while we use the raw pointer.
-    AudioStreamAAudio *oboeStream = reinterpret_cast<AudioStreamAAudio*>(sharedStream.get());
-    oboe_aaudio_error_thread_proc_common(oboeStream, error);
+    AudioStream *baseStream = sharedBaseStream.get();
+    oboe_aaudio_error_thread_proc_common(baseStream, error);
     LOGD("%s() - exiting <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<", __func__);
 }
 
-static void oboe_aaudio_presentation_thread_proc_common(AudioStreamAAudio *oboeStream) {
-    auto presentationCallback = oboeStream->getPresentationCallback();
+static void oboe_aaudio_presentation_thread_proc_common(AudioStream *baseStream) {
+    auto presentationCallback = baseStream->getPresentationCallback();
     if (presentationCallback == nullptr) return; // should be impossible
-    presentationCallback->onPresentationEnded(oboeStream);
+    presentationCallback->onPresentationEnded(baseStream);
 }
 
 // Callback thread for raw pointers
-static void oboe_aaudio_presentation_thread_proc(AudioStreamAAudio *oboeStream) {
+static void oboe_aaudio_presentation_thread_proc(AudioStream *baseStream) {
     LOGD("%s() - entering >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", __func__);
-    oboe_aaudio_presentation_thread_proc_common(oboeStream);
+    oboe_aaudio_presentation_thread_proc_common(baseStream);
     LOGD("%s() - exiting <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<", __func__);
 }
 
 // Callback thread for shared pointers
 static void oboe_aaudio_presentation_end_thread_proc_shared(
-        std::shared_ptr<AudioStream> sharedStream) {
+        std::shared_ptr<AudioStream> sharedBaseStream) {
     LOGD("%s() - entering >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", __func__);
-    AudioStreamAAudio *oboeStream = reinterpret_cast<AudioStreamAAudio*>(sharedStream.get());
-    oboe_aaudio_presentation_thread_proc_common(oboeStream);
+    AudioStream *baseStream = sharedBaseStream.get();
+    oboe_aaudio_presentation_thread_proc_common(baseStream);
     LOGD("%s() - exiting <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<", __func__);
 }
 
@@ -176,7 +176,8 @@ void AudioStreamAAudio::internalErrorCallback(
     oboeStream->mErrorCallbackResult = oboeResult;
 
     // Prevents deletion of the stream if the app is using AudioStreamBuilder::openStream(shared_ptr)
-    std::shared_ptr<AudioStream> sharedStream = oboeStream->lockWeakThis();
+    AudioStream* baseStream = oboeStream->getBaseStream();
+    std::shared_ptr<AudioStream> sharedBaseStream = baseStream->lockWeakThis();
 
     // These checks should be enough because we assume that the stream close()
     // will join() any active callback threads and will not allow new callbacks.
@@ -184,13 +185,13 @@ void AudioStreamAAudio::internalErrorCallback(
         LOGE("%s() multiple error callbacks called!", __func__);
     } else if (stream != oboeStream->getUnderlyingStream()) {
         LOGW("%s() stream already closed or closing", __func__); // might happen if there are bugs
-    } else if (sharedStream) {
+    } else if (sharedBaseStream) {
         // Handle error on a separate thread using shared pointer.
-        std::thread t(oboe_aaudio_error_thread_proc_shared, sharedStream, oboeResult);
+        std::thread t(oboe_aaudio_error_thread_proc_shared, sharedBaseStream, oboeResult);
         t.detach();
     } else {
         // Handle error on a separate thread.
-        std::thread t(oboe_aaudio_error_thread_proc, oboeStream, oboeResult);
+        std::thread t(oboe_aaudio_error_thread_proc, baseStream, oboeResult);
         t.detach();
     }
 }
@@ -949,17 +950,18 @@ void AudioStreamAAudio::internalPresentationEndCallback(AAudioStream *stream, vo
     AudioStreamAAudio *oboeStream = reinterpret_cast<AudioStreamAAudio*>(userData);
 
     // Prevents deletion of the stream if the app is using AudioStreamBuilder::openStream(shared_ptr)
-    std::shared_ptr<AudioStream> sharedStream = oboeStream->lockWeakThis();
+    AudioStream *baseStream = oboeStream->getBaseStream();
+    std::shared_ptr<AudioStream> sharedBaseStream = baseStream->lockWeakThis();
 
     if (stream != oboeStream->getUnderlyingStream()) {
         LOGW("%s() stream already closed or closing", __func__); // might happen if there are bugs
-    } else if (sharedStream) {
+    } else if (sharedBaseStream) {
         // Handle error on a separate thread using shared pointer.
-        std::thread t(oboe_aaudio_presentation_end_thread_proc_shared, sharedStream);
+        std::thread t(oboe_aaudio_presentation_end_thread_proc_shared, sharedBaseStream);
         t.detach();
     } else {
         // Handle error on a separate thread.
-        std::thread t(oboe_aaudio_presentation_thread_proc, oboeStream);
+        std::thread t(oboe_aaudio_presentation_thread_proc, baseStream);
         t.detach();
     }
 }
