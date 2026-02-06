@@ -41,6 +41,18 @@ android {
         }
     }
 
+    buildTypes {
+        create("asan") {
+            initWith(getByName("release"))
+
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DSANITIZE=asan"
+                }
+            }
+        }
+    }
+
     externalNativeBuild {
         cmake {
             path = file("$projectDir/CMakeLists.txt")
@@ -64,6 +76,11 @@ android {
             excludes += "**/*"
         }
     }
+
+    publishing {
+        singleVariant("release")
+        singleVariant("asan")
+    }
 }
 
 dependencies {
@@ -73,24 +90,18 @@ tasks.named<Delete>("clean") {
     delete.add(".cxx")
 }
 
-afterEvaluate {
-    tasks.named("preBuild") {
-        mustRunAfter("clean")
-    }
-    tasks.named("generatePomFileFor${project.name.cap()}Publication") {
-        mustRunAfter("assembleRelease")
-    }
-    tasks.named("publish") {
-        dependsOn("clean", "assembleRelease")
-    }
+tasks.named("publish") {
+    dependsOn("clean")
 }
 
+// afterEvaluate is required:
+// https://developer.android.com/reference/tools/gradle-api/8.6/com/android/build/api/dsl/LibraryPublishing
+afterEvaluate {
+    publishing {
+        val projectName = project.name
+        val githubPackagesUrl = "https://maven.pkg.github.com/jg-hot/oboe"
 
-publishing {
-    val projectName = project.name
-    val githubPackagesUrl = "https://maven.pkg.github.com/jg-hot/oboe"
-
-    repositories {
+        repositories {
         maven {
             url = uri(githubPackagesUrl)
             credentials {
@@ -98,21 +109,19 @@ publishing {
                 password = properties["gpr.key"]?.toString()
             }
         }
-    }
+        }
 
-    publications {
-        create<MavenPublication>(projectName) {
-            artifact(layout.buildDirectory.file("outputs/aar/$projectName-release.aar"))
-            artifactId = "$projectName-patched"
-
-            pom {
-                name = "$projectName-patched"
-                description = "The AAR for Oboe - patched."
-                licenses {
-                    license {
-                        name = "The Oboe License"
-                        url = "https://github.com/google/oboe/blob/main/LICENSE"
-                        distribution = "repo"
+        publications {
+            val createPom: MavenPublication.(type: String) -> Unit = { type ->
+                pom {
+                    name = "$projectName-patched"
+                    description = "The AAR for Oboe - patched ($type build)"
+                    licenses {
+                        license {
+                            name = "The Oboe License"
+                            url = "https://github.com/google/oboe/blob/main/LICENSE"
+                            distribution = "repo"
+                        }
                     }
                     developers {
                         developer {
@@ -124,6 +133,18 @@ publishing {
                         url = "https://github.com/jg-hot/oboe"
                     }
                 }
+            }
+            create<MavenPublication>("release") {
+                from(components["release"])
+                // artifact(layout.buildDirectory.file("outputs/aar/$projectName-release.aar"))
+                artifactId = "$projectName-patched"
+                createPom("release")
+            }
+            create<MavenPublication>("asan") {
+                 from(components["asan"])
+                // artifact(layout.buildDirectory.file("outputs/aar/$projectName-asan.aar"))
+                artifactId = "$projectName-patched-asan"
+                createPom("ASAN")
             }
         }
     }

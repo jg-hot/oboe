@@ -123,3 +123,11 @@ install(TARGETS oboe
 
 # Also install the headers
 install(DIRECTORY include/oboe DESTINATION include)
+
+# Enable sanitizers if requested
+if (SANITIZE)
+    if (${SANITIZE} STREQUAL "asan")
+        target_compile_options(oboe PUBLIC -fsanitize=address -fno-omit-frame-pointer)
+        set_target_properties(oboe PROPERTIES LINK_FLAGS -fsanitize=address)
+    endif ()
+endif ()
