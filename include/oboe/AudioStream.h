@@ -434,15 +434,6 @@ public:
      */
     virtual void updateFramesRead() = 0;
 
-    /**
-     * Set a pointer to the stream that owns this stream.
-     * For internal use only.
-     * @see oboe::AudioStream::getBaseStream
-     */
-    void setParentStream(AudioStream *parentStream) {
-        mParentStream = parentStream;
-    }
-
     /*
      * Swap old callback for new callback.
      * This not atomic.
@@ -468,6 +459,19 @@ public:
         AudioStreamPartialDataCallback *previousPartialCallback = mPartialDataCallback;
         mPartialDataCallback = partialDataCallback;
         return previousPartialCallback;
+    }
+
+    /*
+     * Swap old callback for new callback.
+     * This not atomic.
+     * This should only be used internally.
+     * @param errorCallback
+     * @return previous errorCallback
+     */
+    AudioStreamErrorCallback *swapErrorCallback(AudioStreamErrorCallback *errorCallback) {
+        AudioStreamErrorCallback *previousCallback = mErrorCallback;
+        mErrorCallback = errorCallback;
+        return previousCallback;
     }
 
     /**
@@ -775,13 +779,6 @@ public:
         return ResultWithValue<PlaybackParameters>(Result::ErrorUnimplemented);
     }
 
-    /*
-     * Make a shared_ptr that will prevent this stream from being deleted.
-     */
-    std::shared_ptr<oboe::AudioStream> lockWeakThis() {
-        return mWeakThis.lock();
-    }
-
 protected:
 
     /**
@@ -883,25 +880,19 @@ protected:
      */
     virtual void closePerformanceHint() {}
 
-    /**
-     * Pointer to the stream that owns this stream, if any. Set to a
-     * non-null value when this stream is wrapped by a FilterAudioStream.
-     */
-    AudioStream *mParentStream{};
-
-    /**
-     * Get a pointer to the topmost parent stream (or the stream itself, if no parents exist)
-     */
-    AudioStream *getBaseStream() {
-        return mParentStream ? mParentStream->getBaseStream() : this;
-    }
-
     /*
      * Set a weak_ptr to this stream from the shared_ptr so that we can
      * later use a shared_ptr in the error callback.
      */
     void setWeakThis(std::shared_ptr<oboe::AudioStream> &sharedStream) {
         mWeakThis = sharedStream;
+    }
+
+    /*
+     * Make a shared_ptr that will prevent this stream from being deleted.
+     */
+    std::shared_ptr<oboe::AudioStream> lockWeakThis() {
+        return mWeakThis.lock();
     }
 
     std::weak_ptr<AudioStream> mWeakThis; // weak pointer to this object

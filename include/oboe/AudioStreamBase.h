@@ -140,8 +140,8 @@ public:
      * For internal use only.
      * @return the presentation callback object for this stream, if set.
      */
-    AudioStreamPresentationCallback *getPresentationCallback() const {
-        return mPresentationCallback;
+    std::shared_ptr<AudioStreamPresentationCallback> getPresentationCallback() const {
+        return mSharedPresentationCallback;
     }
 
     /**
@@ -314,8 +314,6 @@ protected:
     AudioStreamErrorCallback       *mErrorCallback = nullptr;
     std::shared_ptr<AudioStreamErrorCallback> mSharedErrorCallback;
 
-    /** The callback which will be fired for presentation related events from the underlying API **/
-    AudioStreamPresentationCallback *mPresentationCallback = nullptr;
     std::shared_ptr<AudioStreamPresentationCallback> mSharedPresentationCallback;
 
     /** Number of audio frames which will be requested in each callback */

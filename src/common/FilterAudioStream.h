@@ -27,7 +27,7 @@ namespace oboe {
  * An AudioStream that wraps another AudioStream and provides audio data conversion.
  * Operations may include channel conversion, data format conversion and/or sample rate conversion.
  */
-class FilterAudioStream : public AudioStream, AudioStreamCallback, AudioStreamPresentationCallback {
+class FilterAudioStream : public AudioStream, AudioStreamCallback {
 public:
 
     /**
@@ -41,19 +41,16 @@ public:
     FilterAudioStream(const AudioStreamBuilder &builder, std::shared_ptr<AudioStream> childStream)
     : AudioStream(builder)
      , mChildStream(childStream) {
-        // Intercept the data callback if used.
+        // Intercept the callback if used.
+        if (builder.isErrorCallbackSpecified()) {
+            mErrorCallback = mChildStream->swapErrorCallback(this);
+        }
         if (builder.isDataCallbackSpecified()) {
             mDataCallback = mChildStream->swapDataCallback(this);
         } else {
             const int size = childStream->getFramesPerBurst() * childStream->getBytesPerFrame();
             mBlockingBuffer = std::make_unique<uint8_t[]>(size);
         }
-        // Forward error and presentation callbacks to the child stream.
-        mErrorCallback = this;
-        mPresentationCallback = this;
-
-        // Link child to parent so parent can be retained using getBaseStream()->lockWeakThis() in callbacks.
-        mChildStream->setParentStream(this);
 
         // Copy parameters that may not match builder.
         mBufferCapacityInFrames = mChildStream->getBufferCapacityInFrames();
@@ -186,31 +183,23 @@ public:
             int32_t numFrames) override;
 
     bool onError(AudioStream * /*audioStream*/, Result error) override {
-        AudioStreamErrorCallback *childCallback = mChildStream->getErrorCallback();
-        if (childCallback != nullptr) {
-            return childCallback->onError(this, error);
+        if (mErrorCallback != nullptr) {
+            return mErrorCallback->onError(this, error);
         }
         return false;
     }
 
     void onErrorBeforeClose(AudioStream * /*oboeStream*/, Result error) override {
-        AudioStreamErrorCallback *childCallback = mChildStream->getErrorCallback();
-        if (childCallback != nullptr) {
-            childCallback->onErrorBeforeClose(this, error);
+        if (mErrorCallback != nullptr) {
+            mErrorCallback->onErrorBeforeClose(this, error);
         }
     }
 
     void onErrorAfterClose(AudioStream * /*oboeStream*/, Result error) override {
-        AudioStreamErrorCallback *childCallback = mChildStream->getErrorCallback();
-        if (childCallback != nullptr) {
-            childCallback->onErrorAfterClose(this, error);
-        }
-    }
-
-    void onPresentationEnded(AudioStream* /* oboeStream */) override {
-        AudioStreamPresentationCallback *childCallback = mChildStream->getPresentationCallback();
-        if (childCallback != nullptr) {
-            childCallback->onPresentationEnded(this);
+        // Close this parent stream because the callback will only close the child.
+        AudioStream::close();
+        if (mErrorCallback != nullptr) {
+            mErrorCallback->onErrorAfterClose(this, error);
         }
     }
 
