@@ -688,8 +688,7 @@ oboe::Result ActivityRecording::stopPlayback() {
         result = playbackStream->requestStop();
         playbackStream->close();
         mPlayRecordingCallback.setRecording(nullptr);
-        delete playbackStream;
-        playbackStream = nullptr;
+        playbackStream.reset();
     }
     return result;
 }
@@ -701,10 +700,9 @@ oboe::Result ActivityRecording::startPlayback() {
             ->setSampleRate(mSampleRate)
             ->setFormat(oboe::AudioFormat::Float)
             ->setCallback(&mPlayRecordingCallback);
-    oboe::Result result = builder.openStream(&playbackStream);
+    oboe::Result result = builder.openStream(playbackStream);
     if (result != oboe::Result::OK) {
-        delete playbackStream;
-        playbackStream = nullptr;
+        playbackStream.reset();
     } else if (playbackStream != nullptr) {
         if (mRecording != nullptr) {
             mRecording->rewind();

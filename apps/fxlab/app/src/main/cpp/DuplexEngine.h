@@ -53,9 +53,9 @@ private:
     template<class numeric>
     void createCallback();
 
-    oboe::ManagedStream inStream;
+    std::shared_ptr<oboe::AudioStream> inStream;
     std::unique_ptr<oboe::AudioStreamCallback> mCallback;
-    oboe::ManagedStream outStream;
+    std::shared_ptr<oboe::AudioStream> outStream;
 
 
 };

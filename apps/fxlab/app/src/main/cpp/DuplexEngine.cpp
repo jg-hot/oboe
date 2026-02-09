@@ -57,18 +57,24 @@ oboe::AudioStreamBuilder DuplexEngine::defaultBuilder() {
 }
 
 void DuplexEngine::openInStream() {
+    if (inStream) {
+        inStream->close();
+    }
     defaultBuilder().setDirection(oboe::Direction::Input)
             ->setFormat(oboe::AudioFormat::Float) // For now
             ->setChannelCount(1) // Mono in for effects processing
-            ->openManagedStream(inStream);
+            ->openStream(inStream);
 }
 
 void DuplexEngine::openOutStream() {
+    if (outStream) {
+        outStream->close();
+    }
     defaultBuilder().setCallback(mCallback.get())
             ->setSampleRate(inStream->getSampleRate())
             ->setFormat(inStream->getFormat())
             ->setChannelCount(2) // Stereo out
-            ->openManagedStream(outStream);
+            ->openStream(outStream);
 }
 
 oboe::Result DuplexEngine::startStreams() {

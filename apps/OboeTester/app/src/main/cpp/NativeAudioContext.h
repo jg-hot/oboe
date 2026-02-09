@@ -444,8 +444,8 @@ public:
 
     oboe::Result stopPlayback() override;
 
-    PlayRecordingCallback        mPlayRecordingCallback;
-    oboe::AudioStream           *playbackStream = nullptr;
+    PlayRecordingCallback              mPlayRecordingCallback;
+    std::shared_ptr<oboe::AudioStream> playbackStream{};
 
 };
 
