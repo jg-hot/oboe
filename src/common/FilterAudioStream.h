@@ -28,17 +28,32 @@ namespace oboe {
  * Operations may include channel conversion, data format conversion and/or sample rate conversion.
  */
 class FilterAudioStream : public AudioStream, AudioStreamCallback {
+
+    // FilterAudioStream must be created through factory create() so weak_from_this()
+    // is available in init().
+    struct Private {
+        explicit Private() = default;
+    };
+
 public:
 
     /**
-     * Construct an `AudioStream` using the given `AudioStreamBuilder` and a child AudioStream.
+     * Factory method to construct an `AudioStream` using the given `AudioStreamBuilder`
+     * and a child AudioStream.
      *
      * This should only be called internally by AudioStreamBuilder.
      * Ownership of childStream will be passed to this object.
      *
      * @param builder containing all the stream's attributes
      */
-    FilterAudioStream(const AudioStreamBuilder &builder, std::shared_ptr<AudioStream> childStream)
+    static std::shared_ptr<FilterAudioStream> create(const AudioStreamBuilder &builder,
+                                                     std::shared_ptr<AudioStream> childStream) {
+        auto stream = std::make_shared<FilterAudioStream>(Private(), builder, childStream);
+        stream->init(Private());
+        return stream;
+    }
+
+    FilterAudioStream(Private, const AudioStreamBuilder &builder, std::shared_ptr<AudioStream> childStream)
     : AudioStream(builder)
      , mChildStream(childStream) {
         // Intercept the callback if used.
@@ -62,6 +77,12 @@ public:
         mHardwareSampleRate = mChildStream->getHardwareSampleRate();
         mHardwareChannelCount = mChildStream->getHardwareChannelCount();
         mHardwareFormat = mChildStream->getHardwareFormat();
+    }
+
+    void init(Private) {
+        // Link child to parent so parent can be retained in callbacks.
+        // Will call weak_from_this() internally
+        mChildStream->setParentStream(this);
     }
 
     virtual ~FilterAudioStream() = default;

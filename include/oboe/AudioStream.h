@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cstdint>
 #include <ctime>
+#include <memory>
 #include <mutex>
 #include "oboe/Definitions.h"
 #include "oboe/ResultWithValue.h"
@@ -40,8 +41,8 @@ constexpr int64_t kDefaultTimeoutNanos = (2000 * kNanosPerMillisecond);
 /**
  * Base class for Oboe C++ audio stream.
  */
-class AudioStream : public AudioStreamBase {
-    friend class AudioStreamBuilder; // allow access to setWeakThis() and lockWeakThis()
+class AudioStream : public AudioStreamBase, public std::enable_shared_from_this<AudioStream> {
+    friend class AudioStreamBuilder;
 public:
 
     AudioStream() {}
@@ -779,11 +780,28 @@ public:
         return ResultWithValue<PlaybackParameters>(Result::ErrorUnimplemented);
     }
 
-    /*
-     * Make a shared_ptr that will prevent this stream from being deleted.
+    /**
+     * Returns a weak reference to the parent stream if this stream is wrapped
+     * by a parent FilterAudioStream. May be unassigned if no parent exists.
      */
-    std::shared_ptr<oboe::AudioStream> lockWeakThis() {
-        return mWeakThis.lock();
+    std::weak_ptr<AudioStream> getParentStream() const {
+        return mParentStream;
+    }
+
+    /**
+     * Returns true if this stream is owned by a parent FilterAudioStream.
+     * When true, the parent must remain alive during callbacks.
+     */
+    bool hasParentStream() const {
+        return mHasParentStream;
+    }
+
+    /**
+     * Sets the parent wrapper stream. For internal use only.
+     */
+    void setParentStream(AudioStream *parentStream) {
+        mParentStream = parentStream->weak_from_this();
+        mHasParentStream = parentStream != nullptr;
     }
 
 protected:
@@ -887,15 +905,12 @@ protected:
      */
     virtual void closePerformanceHint() {}
 
-    /*
-     * Set a weak_ptr to this stream from the shared_ptr so that we can
-     * later use a shared_ptr in the error callback.
-     */
-    void setWeakThis(std::shared_ptr<oboe::AudioStream> &sharedStream) {
-        mWeakThis = sharedStream;
-    }
+    // Weak reference to parent stream.
+    // Non-empty only when wrapped by another AudioStream.
+    std::weak_ptr<AudioStream> mParentStream{};
 
-    std::weak_ptr<AudioStream> mWeakThis; // weak pointer to this object
+    // Flag to indicate whether this stream is wrapped by a parent.
+    bool mHasParentStream{};
 
     /**
      * Number of frames which have been written into the stream

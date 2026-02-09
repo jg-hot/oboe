@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <memory>
 #include <sys/types.h>
 
 
@@ -67,18 +68,20 @@ bool AudioStreamBuilder::isAAudioRecommended() {
     return (getSdkVersion() >= __ANDROID_API_O_MR1__) && isAAudioSupported();
 }
 
-AudioStream *AudioStreamBuilder::build() {
-    AudioStream *stream = nullptr;
+// All streams are required to be created with std::make_shared() (or a factory that uses it)
+// so a weak_ptr can be used to retain streams in callbacks.
+std::shared_ptr<AudioStream> AudioStreamBuilder::build() {
+    std::shared_ptr<AudioStream> stream = nullptr;
     if (isAAudioRecommended() && mAudioApi != AudioApi::OpenSLES) {
-        stream = new AudioStreamAAudio(*this);
+        stream = std::make_shared<AudioStreamAAudio>(*this);
     } else if (isAAudioSupported() && mAudioApi == AudioApi::AAudio) {
-        stream = new AudioStreamAAudio(*this);
+        stream = std::make_shared<AudioStreamAAudio>(*this);
         LOGE("Creating AAudio stream on 8.0 because it was specified. This is error prone.");
     } else {
         if (getDirection() == oboe::Direction::Output) {
-            stream = new AudioOutputStreamOpenSLES(*this);
+            stream = std::make_shared<AudioOutputStreamOpenSLES>(*this);
         } else if (getDirection() == oboe::Direction::Input) {
-            stream = new AudioInputStreamOpenSLES(*this);
+            stream = std::make_shared<AudioInputStreamOpenSLES>(*this);
         }
     }
     return stream;
@@ -91,12 +94,7 @@ bool AudioStreamBuilder::isCompatible(AudioStreamBase &other) {
            && (getChannelCount() == oboe::Unspecified || getChannelCount() == other.getChannelCount());
 }
 
-Result AudioStreamBuilder::openStream(AudioStream **streamPP) {
-    LOGW("Passing AudioStream pointer deprecated, Use openStream(std::shared_ptr<oboe::AudioStream> &stream) instead.");
-    return openStreamInternal(streamPP);
-}
-
-Result AudioStreamBuilder::openStreamInternal(AudioStream **streamPP) {
+Result AudioStreamBuilder::openStreamInternal(std::shared_ptr<AudioStream> &outStream) {
     auto result = isValidConfig();
     if (result != Result::OK) {
         LOGW("%s() invalid config. Error %s", __func__, oboe::convertToText(result));
@@ -113,12 +111,7 @@ Result AudioStreamBuilder::openStreamInternal(AudioStream **streamPP) {
          __func__, getDirection() == Direction::Input ? "INPUT" : "OUTPUT", getVersionText());
 #endif
 
-    if (streamPP == nullptr) {
-        return Result::ErrorNull;
-    }
-    *streamPP = nullptr;
-
-    AudioStream *streamP = nullptr;
+    std::shared_ptr<AudioStream> stream;
 
     // Maybe make a FilterInputStream.
     AudioStreamBuilder childBuilder(*this);
@@ -133,15 +126,15 @@ Result AudioStreamBuilder::openStreamInternal(AudioStream **streamPP) {
                  __func__);
             return Result::ErrorIllegalArgument;
         }
-        AudioStream *tempStream;
-        result = childBuilder.openStreamInternal(&tempStream);
+        std::shared_ptr<AudioStream> tempStream;
+        result = childBuilder.openStreamInternal(tempStream);
         if (result != Result::OK) {
             return result;
         }
 
         if (isCompatible(*tempStream)) {
             // The child stream would work as the requested stream so we can just use it directly.
-            *streamPP = tempStream;
+            outStream = tempStream;
             return result;
         } else {
             AudioStreamBuilder parentBuilder = *this;
@@ -162,23 +155,22 @@ Result AudioStreamBuilder::openStreamInternal(AudioStream **streamPP) {
             // Use childStream in a FilterAudioStream.
             LOGI("%s() create a FilterAudioStream for data conversion.", __func__);
             std::shared_ptr<AudioStream> childStream(tempStream);
-            FilterAudioStream *filterStream = new FilterAudioStream(parentBuilder, childStream);
-            childStream->setWeakThis(childStream);
+            auto filterStream = FilterAudioStream::create(parentBuilder, childStream);
             result = filterStream->configureFlowGraph();
             if (result !=  Result::OK) {
                 filterStream->close();
-                delete filterStream;
+                filterStream.reset();
                 // Just open streamP the old way.
             } else {
-                streamP = static_cast<AudioStream *>(filterStream);
+                stream = filterStream;
             }
         }
     }
 #endif
 
-    if (streamP == nullptr) {
-        streamP = build();
-        if (streamP == nullptr) {
+    if (!stream) {
+        stream = build();
+        if (!stream) {
             return Result::ErrorNull;
         }
     }
@@ -193,26 +185,26 @@ Result AudioStreamBuilder::openStreamInternal(AudioStream **streamPP) {
             wasMMapTemporarilyDisabled = true;
         }
     }
-    result = streamP->open();
+    result = stream->open();
     if (wasMMapTemporarilyDisabled) {
         AAudioExtensions::getInstance().setMMapEnabled(wasMMapOriginallyEnabled); // restore original
     }
     if (result == Result::OK) {
         // AAudio supports setBufferSizeInFrames() so use it.
-        if (streamP->getAudioApi() == AudioApi::AAudio) {
+        if (stream->getAudioApi() == AudioApi::AAudio) {
             int32_t  optimalBufferSize = -1;
             // Use a reasonable default buffer size.
-            if (streamP->getDirection() == Direction::Input) {
+            if (stream->getDirection() == Direction::Input) {
                 // For input, small size does not improve latency because the stream is usually
                 // run close to empty. And a low size can result in XRuns so always use the maximum.
-                optimalBufferSize = streamP->getBufferCapacityInFrames();
-            } else if (streamP->getPerformanceMode() == PerformanceMode::LowLatency
-                    && streamP->getDirection() == Direction::Output)  { // Output check is redundant.
-                optimalBufferSize = streamP->getFramesPerBurst() *
+                optimalBufferSize = stream->getBufferCapacityInFrames();
+            } else if (stream->getPerformanceMode() == PerformanceMode::LowLatency
+                    && stream->getDirection() == Direction::Output)  { // Output check is redundant.
+                optimalBufferSize = stream->getFramesPerBurst() *
                                         knumBurstsForLowLatencyStreams;
             }
             if (optimalBufferSize >= 0) {
-                auto setBufferResult = streamP->setBufferSizeInFrames(optimalBufferSize);
+                auto setBufferResult = stream->setBufferSizeInFrames(optimalBufferSize);
                 if (!setBufferResult) {
                     LOGW("Failed to setBufferSizeInFrames(%d). Error was %s",
                          optimalBufferSize,
@@ -221,32 +213,14 @@ Result AudioStreamBuilder::openStreamInternal(AudioStream **streamPP) {
             }
         }
 
-        *streamPP = streamP;
-    } else {
-        delete streamP;
+        outStream = stream;
     }
-    return result;
-}
-
-Result AudioStreamBuilder::openManagedStream(oboe::ManagedStream &stream) {
-    LOGW("`openManagedStream` is deprecated. Use openStream(std::shared_ptr<oboe::AudioStream> &stream) instead.");
-    stream.reset();
-    AudioStream *streamptr;
-    auto result = openStream(&streamptr);
-    stream.reset(streamptr);
     return result;
 }
 
 Result AudioStreamBuilder::openStream(std::shared_ptr<AudioStream> &sharedStream) {
     sharedStream.reset();
-    AudioStream *streamptr;
-    auto result = openStreamInternal(&streamptr);
-    if (result == Result::OK) {
-        sharedStream.reset(streamptr);
-        // Save a weak_ptr in the stream for use with callbacks.
-        streamptr->setWeakThis(sharedStream);
-    }
-    return result;
+    return openStreamInternal(sharedStream);
 }
 
 } // namespace oboe

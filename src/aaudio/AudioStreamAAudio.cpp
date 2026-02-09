@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+#include <atomic>
 #include <cassert>
 #include <set>
 #include <stdint.h>
 #include <stdlib.h>
+#include <unordered_map>
 
 #include "aaudio/AAudioLoader.h"
 #include "aaudio/AudioStreamAAudio.h"
@@ -41,63 +43,71 @@
 using namespace oboe;
 AAudioLoader *AudioStreamAAudio::mLibLoader = nullptr;
 
-/**
- * A singleton class that manages all opened streams. This class is used to track the lifecycle
- * of aaudio streams. When a stream is opened successfully, it will be added to the collection.
- * When a stream is closed, it will be removed from the collection. This class also provides a
- * function to get a shared pointer from a given raw pointer. By using a shared pointer, it avoids
- * using after free. Note that if the stream is opened with raw pointer, there can still be used
- * after free issue happen as there is nothing preventing the raw pointer from being deleted.
- */
-class AAudioStreamCollection {
-public:
-    static AAudioStreamCollection &getInstance() {
-        static AAudioStreamCollection instance;
-        return instance;
+// AAudioCallbackRegistry implementation
+namespace oboe {
+
+callback_token_t AAudioCallbackRegistry::allocateCallbackToken() {
+    return mNextCallbackToken.fetch_add(1, std::memory_order_relaxed);
+}
+
+void AAudioCallbackRegistry::addStream(AudioStreamAAudio *stream) {
+    std::lock_guard<std::mutex> lock(mLock);
+    auto token = stream->getCallbackToken();
+
+    // Both failure branches below should never happen -- unique tokens are assigned
+    // in stream constructor.
+    if (token == kCallbackTokenUnspecified) {
+        LOGE("%s() attempt to register stream without assigning callback token", __func__);
+        return;
     }
-
-    AAudioStreamCollection(const AAudioStreamCollection &) = delete;
-    AAudioStreamCollection &operator=(const AAudioStreamCollection &) = delete;
-    AAudioStreamCollection(AAudioStreamCollection &&) = delete;
-    AAudioStreamCollection &operator=(AAudioStreamCollection &&) = delete;
-
-    void addStream(AudioStreamAAudio* stream) {
-        std::lock_guard<std::mutex> lock(mLock);
-        mStreams.insert(stream);
+    auto [_, inserted] = mStreams.insert_or_assign(token, stream->weak_from_this());
+    if (!inserted) {
+        LOGE("%s() callback token collision - replacing previous stream (token=%d)", __func__, static_cast<int>(token));
     }
+}
 
-    void removeStream(AudioStreamAAudio* stream) {
-        std::lock_guard<std::mutex> lock(mLock);
-        mStreams.erase(stream);
+void AAudioCallbackRegistry::removeStream(AudioStreamAAudio *stream) {
+    std::lock_guard<std::mutex> lock(mLock);
+    mStreams.erase(stream->getCallbackToken());
+}
+
+std::tuple<bool,
+           std::shared_ptr<oboe::AudioStreamAAudio>,
+           std::shared_ptr<AudioStream>>
+AAudioCallbackRegistry::getStream(callback_token_t token) {
+
+    std::lock_guard<std::mutex> lock(mLock);
+
+    // Token must be assigned to stream at construction.
+    if (token == kCallbackTokenUnspecified) {
+        return {false, nullptr, nullptr};
     }
+    // If the token is not present, the stream was already removed from the
+    // registry (close() called).
+    auto it = mStreams.find(token);
+    if (it == mStreams.end()) {
+        return {false, nullptr, nullptr};
+    }
+    // Lock the AAudioStream. Failure means the client released ownership without
+    // calling close(); treat as non-recoverable and abort callback.
+    auto stream = std::static_pointer_cast<AudioStreamAAudio>(it->second.lock());
+    if (!stream) {
+        return {false, nullptr, nullptr};
+    }
+    // If wrapped by FilterAudioStream, the parent must remain alive because
+    // callbacks are routed through it.
+    std::shared_ptr<AudioStream> parentStream;
 
-    /**
-     * Get a shared pointer to the stream. This is typically called from a callback thread.
-     *
-     * @param stream raw pointer to the stream.
-     * @return a pair of a boolean and a shared pointer to the stream. The boolean indicates
-     *         if the stream is present in the collection. The shared pointer is valid only if
-     *         the stream is opened with shared pointer and is not closed.
-     */
-    std::pair<bool, std::shared_ptr<oboe::AudioStream>> getStream(AudioStreamAAudio* stream) {
-        if (stream == nullptr) {
-            return {false, nullptr};
+    if (stream->hasParentStream()) {
+        parentStream = stream->getParentStream().lock();
+        if (!parentStream) {
+            return {false, nullptr, nullptr};
         }
-        std::lock_guard<std::mutex> lock(mLock);
-        if (mStreams.find(stream) != mStreams.end()) {
-            auto sharedStream = stream->lockWeakThis();
-            return {true, sharedStream};
-        }
-        return {false, nullptr};
     }
+    return {true, stream, parentStream};
+}
 
-private:
-    // Private constructor to prevent direct instantiation
-    AAudioStreamCollection() = default;
-
-    std::mutex mLock;
-    std::set<AudioStreamAAudio*> mStreams;
-};
+} // namespace oboe
 
 // 'C' wrapper for the data callback method
 static aaudio_data_callback_result_t oboe_aaudio_data_callback_proc(
@@ -106,9 +116,10 @@ static aaudio_data_callback_result_t oboe_aaudio_data_callback_proc(
         void *audioData,
         int32_t numFrames) {
 
-    AudioStreamAAudio *oboeStream = reinterpret_cast<AudioStreamAAudio*>(userData);
-    auto [isStreamAlive, sharedStream] =
-            AAudioStreamCollection::getInstance().getStream(oboeStream);
+    auto token = reinterpret_cast<callback_token_t>(userData);
+
+    auto [isStreamAlive, oboeStream, parentStream] =
+            AAudioCallbackRegistry::getInstance().getStream(token);
     if (!isStreamAlive) {
         // Note that the stream is removed from the collection when close is called. However,
         // there can be callback fired until the framework fully close the stream. In that case,
@@ -116,13 +127,8 @@ static aaudio_data_callback_result_t oboe_aaudio_data_callback_proc(
         LOGW("%s data callback while stream is not longer alive", __func__);
         return static_cast<aaudio_data_callback_result_t>(DataCallbackResult::Stop);
     }
-    if (oboeStream != nullptr) {
-        return static_cast<aaudio_data_callback_result_t>(
-                oboeStream->callOnAudioReady(stream, audioData, numFrames));
-
-    } else {
-        return static_cast<aaudio_data_callback_result_t>(DataCallbackResult::Stop);
-    }
+    return static_cast<aaudio_data_callback_result_t>(
+            oboeStream->callOnAudioReady(stream, audioData, numFrames));
 }
 
 // 'C' wrapper for the partial data callback method
@@ -131,9 +137,11 @@ static int32_t oboe_aaudio_partial_data_callback_proc(
         void *userData,
         void *audioData,
         int32_t numFrames) {
-    AudioStreamAAudio *oboeStream = reinterpret_cast<AudioStreamAAudio*>(userData);
-    auto [isStreamAlive, sharedStream] =
-            AAudioStreamCollection::getInstance().getStream(oboeStream);
+
+    auto token = reinterpret_cast<callback_token_t>(userData);
+
+    auto [isStreamAlive, oboeStream, parentStream] =
+            AAudioCallbackRegistry::getInstance().getStream(token);
     if (!isStreamAlive) {
         // Note that the stream is removed from the collection when close is called. However,
         // there can be callback fired until the framework fully close the stream. In that case,
@@ -142,12 +150,7 @@ static int32_t oboe_aaudio_partial_data_callback_proc(
         LOGW("%s data callback while stream is not longer alive", __func__);
         return -1;
     }
-    if (oboeStream != nullptr) {
-        return oboeStream->callOnPartialAudioReady(stream, audioData, numFrames);
-    } else {
-        // Return negative number to stop the stream.
-        return -1;
-    }
+    return oboeStream->callOnPartialAudioReady(stream, audioData, numFrames);
 }
 
 // This runs in its own thread.
@@ -173,19 +176,12 @@ static void oboe_aaudio_error_thread_proc_common(AudioStreamAAudio *oboeStream,
     }
 }
 
-// Callback thread for raw pointers.
-static void oboe_aaudio_error_thread_proc(AudioStreamAAudio *oboeStream,
-                                          Result error) {
-    LOGD("%s(,%d) - entering >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", __func__, error);
-    oboe_aaudio_error_thread_proc_common(oboeStream, error);
-    LOGD("%s() - exiting <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<", __func__);
-}
-
 // Callback thread for shared pointers.
 static void oboe_aaudio_error_thread_proc_shared(std::shared_ptr<AudioStream> sharedStream,
+                                          std::shared_ptr<AudioStream> parentStream,
                                           Result error) {
     LOGD("%s(,%d) - entering >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", __func__, error);
-    // Hold the shared pointer while we use the raw pointer.
+    // Hold the shared pointer(s) while we use the raw pointer.
     AudioStreamAAudio *oboeStream = reinterpret_cast<AudioStreamAAudio*>(sharedStream.get());
     oboe_aaudio_error_thread_proc_common(oboeStream, error);
     LOGD("%s() - exiting <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<", __func__);
@@ -197,17 +193,12 @@ static void oboe_aaudio_presentation_thread_proc_common(AudioStreamAAudio *oboeS
     presentationCallback->onPresentationEnded(oboeStream);
 }
 
-// Callback thread for raw pointers
-static void oboe_aaudio_presentation_thread_proc(AudioStreamAAudio *oboeStream) {
-    LOGD("%s() - entering >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", __func__);
-    oboe_aaudio_presentation_thread_proc_common(oboeStream);
-    LOGD("%s() - exiting <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<", __func__);
-}
-
 // Callback thread for shared pointers
 static void oboe_aaudio_presentation_end_thread_proc_shared(
-        std::shared_ptr<AudioStream> sharedStream) {
+        std::shared_ptr<AudioStream> sharedStream,
+        std::shared_ptr<AudioStream> parentStream) {
     LOGD("%s() - entering >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", __func__);
+    // Hold the shared pointer(s) while we use the raw pointer.
     AudioStreamAAudio *oboeStream = reinterpret_cast<AudioStreamAAudio*>(sharedStream.get());
     oboe_aaudio_presentation_thread_proc_common(oboeStream);
     LOGD("%s() - exiting <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<", __func__);
@@ -220,7 +211,10 @@ namespace oboe {
  */
 AudioStreamAAudio::AudioStreamAAudio(const AudioStreamBuilder &builder)
     : AudioStream(builder)
-    , mAAudioStream(nullptr) {
+    , mAAudioStream(nullptr)
+    , mCallbackToken(
+        AAudioCallbackRegistry::getInstance().allocateCallbackToken()
+    ) {
     mCallbackThreadEnabled.store(false);
     mLibLoader = AAudioLoader::getInstance();
 }
@@ -240,7 +234,7 @@ void AudioStreamAAudio::internalErrorCallback(
         void *userData,
         aaudio_result_t error) {
     oboe::Result oboeResult = static_cast<Result>(error);
-    AudioStreamAAudio *oboeStream = reinterpret_cast<AudioStreamAAudio*>(userData);
+    auto token = reinterpret_cast<callback_token_t>(userData);
 
     // Coerce the error code if needed to workaround a regression in RQ1A that caused
     // the wrong code to be passed when headsets plugged in. See b/173928197.
@@ -252,8 +246,9 @@ void AudioStreamAAudio::internalErrorCallback(
     }
 
     // Prevents deletion of the stream if the app is using AudioStreamBuilder::openStream(shared_ptr)
-    auto [isStreamAlive, sharedStream] =
-            AAudioStreamCollection::getInstance().getStream(oboeStream);
+    auto [isStreamAlive, oboeStream, parentStream] =
+            AAudioCallbackRegistry::getInstance().getStream(token);
+
     if (!isStreamAlive) {
         // The stream is already closed. No need to call error callback.
         return;
@@ -267,13 +262,9 @@ void AudioStreamAAudio::internalErrorCallback(
         LOGE("%s() multiple error callbacks called!", __func__);
     } else if (stream != oboeStream->getUnderlyingStream()) {
         LOGW("%s() stream already closed or closing", __func__); // might happen if there are bugs
-    } else if (sharedStream) {
-        // Handle error on a separate thread using shared pointer.
-        std::thread t(oboe_aaudio_error_thread_proc_shared, sharedStream, oboeResult);
-        t.detach();
     } else {
-        // Handle error on a separate thread.
-        std::thread t(oboe_aaudio_error_thread_proc, oboeStream, oboeResult);
+        // Handle error on a separate thread using shared pointer.
+        std::thread t(oboe_aaudio_error_thread_proc_shared, oboeStream, parentStream, oboeResult);
         t.detach();
     }
 }
@@ -463,11 +454,12 @@ Result AudioStreamAAudio::open() {
     } else {
         mSpatializationBehavior = SpatializationBehavior::Never;
     }
+    auto callbackToken = reinterpret_cast<void*>(getCallbackToken());
 
     if (anyDataCallbackSpecified()) {
         if (isDataCallbackSpecified()) {
             mLibLoader->builder_setDataCallback(
-                    aaudioBuilder, oboe_aaudio_data_callback_proc, this);
+                    aaudioBuilder, oboe_aaudio_data_callback_proc, callbackToken);
         } else if (isPartialDataCallbackSpecified()) {
             if (mLibLoader->builder_setPartialDataCallback == nullptr) {
                 // This must not happen. The stream should fail open from the builder.
@@ -476,7 +468,7 @@ Result AudioStreamAAudio::open() {
                 return Result::ErrorIllegalArgument;
             }
             mLibLoader->builder_setPartialDataCallback(
-                    aaudioBuilder, oboe_aaudio_partial_data_callback_proc, this);
+                    aaudioBuilder, oboe_aaudio_partial_data_callback_proc, callbackToken);
         }
         mLibLoader->builder_setFramesPerDataCallback(aaudioBuilder, getFramesPerDataCallback());
 
@@ -485,7 +477,7 @@ Result AudioStreamAAudio::open() {
             // our own so the stream gets closed and stopped.
             mErrorCallback = &mDefaultErrorCallback;
         }
-        mLibLoader->builder_setErrorCallback(aaudioBuilder, internalErrorCallback, this);
+        mLibLoader->builder_setErrorCallback(aaudioBuilder, internalErrorCallback, callbackToken);
     }
     // Else if the data callback is not being used then the write method will return an error
     // and the app can stop and close the stream.
@@ -494,7 +486,7 @@ Result AudioStreamAAudio::open() {
         mLibLoader->builder_setPresentationEndCallback != nullptr) {
         mLibLoader->builder_setPresentationEndCallback(aaudioBuilder,
                                                        internalPresentationEndCallback,
-                                                       this);
+                                                       callbackToken);
     }
 
     // ============= OPEN THE STREAM ================
@@ -599,8 +591,8 @@ error2:
              mLibLoader->convertResultToText(static_cast<aaudio_result_t>(result)),
              static_cast<int>(result));
         if (result == Result::OK) {
-            // Only add the stream to collection when successfully open.
-            AAudioStreamCollection::getInstance().addStream(this);
+            // Only add the stream to callback registry when successfully open.
+            AAudioCallbackRegistry::getInstance().addStream(this);
         }
     }
     return result;
@@ -633,9 +625,9 @@ Result AudioStreamAAudio::release() {
 
 Result AudioStreamAAudio::close() {
     LOGD("%s", __func__);
-    // Always remove the stream from the collection before closing it as after closing, the client
+    // Always remove the stream from the callback registry before closing it as after closing, the client
     // will free the resource of the stream.
-    AAudioStreamCollection::getInstance().removeStream(this);
+    AAudioCallbackRegistry::getInstance().removeStream(this);
 
     // Prevent two threads from closing the stream at the same time and crashing.
     // This could occur, for example, if an application called close() at the same
@@ -1038,11 +1030,11 @@ bool AudioStreamAAudio::isMMapUsed() {
 // Launch a thread to handle the error.
 // That other thread can safely stop, close and delete the stream.
 void AudioStreamAAudio::internalPresentationEndCallback(AAudioStream *stream, void *userData) {
-    AudioStreamAAudio *oboeStream = reinterpret_cast<AudioStreamAAudio*>(userData);
+    auto token = reinterpret_cast<callback_token_t>(userData);
 
     // Prevents deletion of the stream if the app is using AudioStreamBuilder::openStream(shared_ptr)
-    auto [isStreamAlive, sharedStream] =
-            AAudioStreamCollection::getInstance().getStream(oboeStream);
+    auto [isStreamAlive, oboeStream, parentStream] =
+            AAudioCallbackRegistry::getInstance().getStream(token);
     if (!isStreamAlive) {
         // Client has closed the stream, no need to call the presentation end callback here.
         return;
@@ -1050,13 +1042,9 @@ void AudioStreamAAudio::internalPresentationEndCallback(AAudioStream *stream, vo
 
     if (stream != oboeStream->getUnderlyingStream()) {
         LOGW("%s() stream already closed or closing", __func__); // might happen if there are bugs
-    } else if (sharedStream) {
-        // Handle error on a separate thread using shared pointer.
-        std::thread t(oboe_aaudio_presentation_end_thread_proc_shared, sharedStream);
-        t.detach();
     } else {
-        // Handle error on a separate thread.
-        std::thread t(oboe_aaudio_presentation_thread_proc, oboeStream);
+        // Handle error on a separate thread using shared pointer.
+        std::thread t(oboe_aaudio_presentation_end_thread_proc_shared, oboeStream, parentStream);
         t.detach();
     }
 }

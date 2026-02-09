@@ -24,10 +24,6 @@
 
 namespace oboe {
 
-    // This depends on AudioStream, so we use forward declaration, it will close and delete the stream
-    struct StreamDeleterFunctor;
-    using ManagedStream = std::unique_ptr<AudioStream, StreamDeleterFunctor>;
-
 /**
  * Factory class for an audio Stream.
  */
@@ -715,18 +711,6 @@ public:
     /**
      * Create and open a stream object based on the current settings.
      *
-     * The caller owns the pointer to the AudioStream object
-     * and must delete it when finished.
-     *
-     * @deprecated Use openStream(std::shared_ptr<oboe::AudioStream> &stream) instead.
-     * @param stream pointer to a variable to receive the stream address
-     * @return OBOE_OK if successful or a negative error code
-     */
-    Result openStream(AudioStream **stream);
-
-    /**
-     * Create and open a stream object based on the current settings.
-     *
      * The caller shares the pointer to the AudioStream object.
      * The shared_ptr is used internally by Oboe to prevent the stream from being
      * deleted while it is being used by callbacks.
@@ -736,19 +720,6 @@ public:
      */
     Result openStream(std::shared_ptr<oboe::AudioStream> &stream);
 
-    /**
-     * Create and open a ManagedStream object based on the current builder state.
-     *
-     * The caller must create a unique ptr, and pass by reference so it can be
-     * modified to point to an opened stream. The caller owns the unique ptr,
-     * and it will be automatically closed and deleted when going out of scope.
-     *
-     * @deprecated Use openStream(std::shared_ptr<oboe::AudioStream> &stream) instead.
-     * @param stream Reference to the ManagedStream (uniqueptr) used to keep track of stream
-     * @return OBOE_OK if successful or a negative error code.
-     */
-    Result openManagedStream(ManagedStream &stream);
-
 private:
 
     /**
@@ -757,7 +728,7 @@ private:
      * @param stream pointer to a variable to receive the stream address
      * @return OBOE_OK if successful or a negative error code.
      */
-    Result openStreamInternal(AudioStream **streamPP);
+    Result openStreamInternal(std::shared_ptr<AudioStream> &outStream);
 
     /**
      * @param other
@@ -772,7 +743,7 @@ private:
      *
      * @return pointer to an AudioStream object or nullptr.
      */
-    oboe::AudioStream *build();
+    std::shared_ptr<oboe::AudioStream> build();
 
     AudioApi       mAudioApi = AudioApi::Unspecified;
 };
