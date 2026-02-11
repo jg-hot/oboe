@@ -11,7 +11,7 @@ plugins {
 
 // project.name ("oboe") defined in settings.gradle.kts
 project.group = "com.google.oboe"
-project.version = "1.10.0-patch1"
+project.version = "1.10.0-patch2"
 
 val abis = listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
 
